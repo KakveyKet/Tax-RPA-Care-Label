@@ -2,3 +2,4 @@ streamlit
 pypdf
 pandas
 streamlit-pdf-viewer
+streamlit-javascript

@@ -1,39 +1,66 @@
 import streamlit as st
+import streamlit.components.v1 as components
+from streamlit_javascript import st_javascript
 import pandas as pd
 import os
 from streamlit_pdf_viewer import pdf_viewer
 
+# Import our custom logic from the other files
 import database as db
 import pdf_engine as engine
 
+# Initialize the database on startup
 db.init_db()
 
+# Page Config MUST be the very first Streamlit command
 st.set_page_config(page_title="RPA Care Label", page_icon="🤖", layout="wide")
 
 # ==========================================
-# 1. AUTHENTICATION SYSTEM (UPDATED)
+# 0. SECURE LOGOUT EXECUTOR
+# ==========================================
+# If the user clicked logout, we inject JS to destroy the cookies and refresh the page.
+if st.session_state.get("just_logged_out", False):
+    components.html(
+        """
+        <script>
+        window.parent.document.cookie = 'rpa_auth=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        window.parent.document.cookie = 'rpa_role=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+        window.parent.location.reload();
+        </script>
+        """,
+        height=0, width=0
+    )
+    st.session_state.just_logged_out = False
+    st.stop() # Kill the python script while the browser reloads
+
+# ==========================================
+# 1. AUTHENTICATION SYSTEM
 # ==========================================
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.user_role = None # Track if they are admin or user
-
-def verify_login():
-    """Checks credentials against the encrypted database."""
-    # Using the new database function instead of hardcoded strings
-    is_valid, role = db.verify_user(st.session_state.username, st.session_state.password)
-    
-    if is_valid:
-        st.session_state.logged_in = True
-        st.session_state.user_role = role
-    else:
-        st.session_state.logged_in = False
-        st.error("Incorrect username or password.", icon=":material/error:")
-
-def logout():
-    st.session_state.logged_in = False
-    st.session_state.username = ""
-    st.session_state.password = ""
     st.session_state.user_role = None
+
+# AUTO-LOGIN: Only ask the browser for cookies if Python thinks we are logged out
+if not st.session_state.logged_in:
+    raw_cookies = st_javascript("document.cookie", key="read_cookies")
+    
+    # THE FIX: st_javascript returns '0' while it is fetching data from the browser.
+    # We MUST stop the script here so it doesn't accidentally draw the login screen while it thinks!
+    if raw_cookies == 0:
+        st.stop()
+        
+    def parse_cookie(cookie_string, cookie_name):
+        if isinstance(cookie_string, str):
+            for c in cookie_string.split(';'):
+                if c.strip().startswith(f"{cookie_name}="):
+                    return c.split('=')[1]
+        return None
+
+    auth_cookie = parse_cookie(raw_cookies, "rpa_auth")
+    if auth_cookie == "true":
+        st.session_state.logged_in = True
+        st.session_state.user_role = parse_cookie(raw_cookies, "rpa_role")
+        st.rerun() # Instantly reload to bypass the login screen
 
 # ==========================================
 # 2. THE LOGIN SCREEN
@@ -44,26 +71,61 @@ if not st.session_state.logged_in:
     with col2:
         st.title(":material/smart_toy: RPA Care Label")
         st.write("Please log in to access the automation system.")
-        
         st.write("---")
-        st.text_input("Username", key="username")
-        st.text_input("Password", type="password", key="password")
         
-        st.button("Login", on_click=verify_login, type="primary", use_container_width=True)
+        with st.form("login_form"):
+            username_input = st.text_input("Username")
+            password_input = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
+            
+            if submitted:
+                is_valid, role = db.verify_user(username_input, password_input)
+                
+                if is_valid:
+                    # 1. Update Python's memory
+                    st.session_state.logged_in = True
+                    st.session_state.user_role = role
+                    # 2. Trigger the cookie injection flag
+                    st.session_state.just_logged_in = True
+                    # 3. Reload to hide the login screen
+                    st.rerun()
+                else:
+                    st.error("Incorrect username or password.", icon=":material/error:")
 
 # ==========================================
 # 3. THE MAIN APPLICATION
 # ==========================================
-else:
-    st.sidebar.button("Logout", on_click=logout, icon=":material/logout:", use_container_width=True)
-    st.sidebar.write("---")
+if st.session_state.logged_in:
+    
+    # ==========================================
+    # BROWSER COOKIE INJECTION
+    # ==========================================
+    # This runs exactly once right after a successful login to save the cookies
+    if st.session_state.get("just_logged_in", False):
+        components.html(
+            f"""
+            <script>
+            window.parent.document.cookie = 'rpa_auth=true; path=/; max-age=2592000';
+            window.parent.document.cookie = 'rpa_role={st.session_state.user_role}; path=/; max-age=2592000';
+            </script>
+            """,
+            height=0, width=0
+        )
+        st.session_state.just_logged_in = False
+    
+    # ------------------------------------------
+    # SIDEBAR & MENU
+    # ------------------------------------------
+    if st.sidebar.button("Logout", icon=":material/logout:", use_container_width=True):
+        st.session_state.just_logged_out = True
+        st.rerun() # Triggers the executor at the top of the script
 
+    st.sidebar.write("---")
     st.sidebar.title(":material/smart_toy: RPA Menu")
     
-    # dynamically build the menu based on their role
     menu_options = ["Care Label Extractor", "Processing History"]
     if st.session_state.user_role == "admin":
-        menu_options.append("Admin Settings") # Only admins see this!
+        menu_options.append("Admin Settings") 
         
     app_mode = st.sidebar.radio("Select a module:", menu_options)
 
@@ -71,7 +133,8 @@ else:
     st.sidebar.write("### :material/settings: System Settings")
     custom_target_dir = st.sidebar.text_input(
         "Local Output Directory:",
-        value=r"D:\var\www\pdf_injector"
+        value=r"D:\var\www\pdf_injector",
+        help="Define where the original PDFs should be archived on your local machine."
     )
 
     # ------------------------------------------
@@ -192,7 +255,7 @@ else:
             st.error(f"Could not load system database: {e}", icon=":material/error:")
 
     # ------------------------------------------
-    # MODULE: Admin Settings (NEW!)
+    # MODULE: Admin Settings
     # ------------------------------------------
     elif app_mode == "Admin Settings":
         st.title(":material/admin_panel_settings: System Administration")
@@ -200,7 +263,6 @@ else:
 
         st.write("### Create New User")
         
-        # User creation form
         with st.form("new_user_form"):
             new_user = st.text_input("New Username")
             new_pass = st.text_input("New Password", type="password")
