@@ -44,7 +44,7 @@ if "logged_in" not in st.session_state:
 if not st.session_state.logged_in:
     raw_cookies = st_javascript("document.cookie", key="read_cookies")
     
-    # THE FIX: st_javascript returns '0' while it is fetching data from the browser.
+    # st_javascript returns '0' while it is fetching data from the browser.
     # We MUST stop the script here so it doesn't accidentally draw the login screen while it thinks!
     if raw_cookies == 0:
         st.stop()
@@ -153,14 +153,24 @@ if st.session_state.logged_in:
             for uploaded_file in uploaded_files:
                 if uploaded_file.name not in st.session_state.saved_files:
                     try:
-                        os.makedirs(custom_target_dir, exist_ok=True)
-                        save_path = os.path.join(custom_target_dir, uploaded_file.name)
+                        # --- SMART FALLBACK LOGIC ---
+                        try:
+                            os.makedirs(custom_target_dir, exist_ok=True)
+                            final_dir = custom_target_dir
+                        except OSError:
+                            # If D:\ doesn't exist, create a folder locally next to the code!
+                            final_dir = os.path.join(os.getcwd(), "fallback_pdf_archive")
+                            os.makedirs(final_dir, exist_ok=True)
+                            st.warning(f"Drive not found for '{custom_target_dir}'. Automatically created and saved to: {final_dir}", icon=":material/warning:")
+
+                        save_path = os.path.join(final_dir, uploaded_file.name)
                         with open(save_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
                             
                         db.log_upload(uploaded_file.name, save_path)
                         st.session_state.saved_files.add(uploaded_file.name)
-                        st.success(f"File physically saved at: {os.path.abspath(save_path)}")
+                        st.toast(f"Archived to: {final_dir}", icon=":material/save:")
+                        
                     except Exception as e:
                         st.error(f"Failed to archive '{uploaded_file.name}'. Error: {e}", icon=":material/error:")
 
