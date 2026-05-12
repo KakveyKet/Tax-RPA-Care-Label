@@ -3,22 +3,55 @@ import streamlit.components.v1 as components
 from streamlit_javascript import st_javascript
 import pandas as pd
 import os
+import re # <-- NEW: For searching text
+from pypdf import PdfReader # <-- NEW: For reading the PDF text
 from streamlit_pdf_viewer import pdf_viewer
 
-# Import our custom logic from the other files
 import database as db
 import pdf_engine as engine
 
-# Initialize the database on startup
 db.init_db()
 
-# Page Config MUST be the very first Streamlit command
 st.set_page_config(page_title="RPA Care Label", page_icon="🤖", layout="wide")
+
+# ==========================================
+# NEW: SMART FILENAME EXTRACTOR
+# ==========================================
+def get_clean_filename(uploaded_file):
+    """Reads the PDF to extract the season and formats the filename cleanly."""
+    base_name, ext = os.path.splitext(uploaded_file.name)
+    
+    # 1. Clean up the CET timestamp to use parentheses
+    if " CET_" in base_name:
+        base_name = base_name.replace(" CET_", " (") + ")"
+        
+    # 2. Extract the Season from the PDF text!
+    season = None
+    try:
+        reader = PdfReader(uploaded_file)
+        first_page_text = reader.pages[0].extract_text()
+        uploaded_file.seek(0) # CRITICAL: Reset the file pointer so the rest of the app can read it
+        
+        # Look for "Season :" followed by any spaces, then grab the text (e.g. FW2026)
+        match = re.search(r'Season\s*:\s*([A-Za-z0-9]+)', first_page_text)
+        if match:
+            season = match.group(1)
+    except Exception:
+        pass
+        
+    # 3. Inject the season into the filename if it was found
+    if season and f"_{season}" not in base_name:
+        parts = base_name.split('_', 1) # Split after the Working #
+        if len(parts) == 2:
+            base_name = f"{parts[0]}_{season}_{parts[1]}"
+        else:
+            base_name = f"{base_name}_{season}"
+            
+    return base_name + ext
 
 # ==========================================
 # 0. SECURE LOGOUT EXECUTOR
 # ==========================================
-# If the user clicked logout, we inject JS to destroy the cookies and refresh the page.
 if st.session_state.get("just_logged_out", False):
     components.html(
         """
@@ -31,7 +64,7 @@ if st.session_state.get("just_logged_out", False):
         height=0, width=0
     )
     st.session_state.just_logged_out = False
-    st.stop() # Kill the python script while the browser reloads
+    st.stop() 
 
 # ==========================================
 # 1. AUTHENTICATION SYSTEM
@@ -40,12 +73,9 @@ if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_role = None
 
-# AUTO-LOGIN: Only ask the browser for cookies if Python thinks we are logged out
 if not st.session_state.logged_in:
     raw_cookies = st_javascript("document.cookie", key="read_cookies")
     
-    # st_javascript returns '0' while it is fetching data from the browser.
-    # We MUST stop the script here so it doesn't accidentally draw the login screen while it thinks!
     if raw_cookies == 0:
         st.stop()
         
@@ -60,7 +90,7 @@ if not st.session_state.logged_in:
     if auth_cookie == "true":
         st.session_state.logged_in = True
         st.session_state.user_role = parse_cookie(raw_cookies, "rpa_role")
-        st.rerun() # Instantly reload to bypass the login screen
+        st.rerun() 
 
 # ==========================================
 # 2. THE LOGIN SCREEN
@@ -82,12 +112,9 @@ if not st.session_state.logged_in:
                 is_valid, role = db.verify_user(username_input, password_input)
                 
                 if is_valid:
-                    # 1. Update Python's memory
                     st.session_state.logged_in = True
                     st.session_state.user_role = role
-                    # 2. Trigger the cookie injection flag
                     st.session_state.just_logged_in = True
-                    # 3. Reload to hide the login screen
                     st.rerun()
                 else:
                     st.error("Incorrect username or password.", icon=":material/error:")
@@ -97,10 +124,6 @@ if not st.session_state.logged_in:
 # ==========================================
 if st.session_state.logged_in:
     
-    # ==========================================
-    # BROWSER COOKIE INJECTION
-    # ==========================================
-    # This runs exactly once right after a successful login to save the cookies
     if st.session_state.get("just_logged_in", False):
         components.html(
             f"""
@@ -113,12 +136,9 @@ if st.session_state.logged_in:
         )
         st.session_state.just_logged_in = False
     
-    # ------------------------------------------
-    # SIDEBAR & MENU
-    # ------------------------------------------
     if st.sidebar.button("Logout", icon=":material/logout:", use_container_width=True):
         st.session_state.just_logged_out = True
-        st.rerun() # Triggers the executor at the top of the script
+        st.rerun() 
 
     st.sidebar.write("---")
     st.sidebar.title(":material/smart_toy: RPA Menu")
@@ -129,13 +149,7 @@ if st.session_state.logged_in:
         
     app_mode = st.sidebar.radio("Select a module:", menu_options)
 
-    st.sidebar.write("---")
-    st.sidebar.write("### :material/settings: System Settings")
-    custom_target_dir = st.sidebar.text_input(
-        "Local Output Directory:",
-        value=r"D:\var\www\pdf_injector",
-        help="Define where the original PDFs should be archived on your local machine."
-    )
+    custom_target_dir = r"D:\var\www\pdf_injector"
 
     # ------------------------------------------
     # MODULE: RPA Care Label Extractor
@@ -150,33 +164,35 @@ if st.session_state.logged_in:
             if "saved_files" not in st.session_state:
                 st.session_state.saved_files = set()
                 
+            # 1. Archiving Loop
             for uploaded_file in uploaded_files:
-                if uploaded_file.name not in st.session_state.saved_files:
+                # Use our new magic helper function!
+                clean_filename = get_clean_filename(uploaded_file)
+                
+                if clean_filename not in st.session_state.saved_files:
                     try:
-                        # --- SMART FALLBACK LOGIC ---
                         try:
                             os.makedirs(custom_target_dir, exist_ok=True)
                             final_dir = custom_target_dir
                         except OSError:
-                            # If D:\ doesn't exist, create a folder locally next to the code!
                             final_dir = os.path.join(os.getcwd(), "fallback_pdf_archive")
                             os.makedirs(final_dir, exist_ok=True)
-                            st.warning(f"Drive not found for '{custom_target_dir}'. Automatically created and saved to: {final_dir}", icon=":material/warning:")
 
-                        save_path = os.path.join(final_dir, uploaded_file.name)
+                        save_path = os.path.join(final_dir, clean_filename)
                         with open(save_path, "wb") as f:
                             f.write(uploaded_file.getbuffer())
                             
-                        db.log_upload(uploaded_file.name, save_path)
-                        st.session_state.saved_files.add(uploaded_file.name)
-                        st.toast(f"Archived to: {final_dir}", icon=":material/save:")
+                        db.log_upload(clean_filename, save_path)
+                        st.session_state.saved_files.add(clean_filename)
+                        st.toast(f"Archived: {clean_filename}", icon=":material/save:")
                         
                     except Exception as e:
-                        st.error(f"Failed to archive '{uploaded_file.name}'. Error: {e}", icon=":material/error:")
+                        st.error(f"Failed to archive '{clean_filename}'. Error: {e}", icon=":material/error:")
 
             st.write("### :material/visibility: Source Document Preview")
             for uploaded_file in uploaded_files:
-                with st.expander(f":material/visibility: Inspect: {uploaded_file.name}"):
+                clean_filename = get_clean_filename(uploaded_file)
+                with st.expander(f":material/visibility: Inspect: {clean_filename}"):
                     pdf_viewer(uploaded_file.getvalue(), width=1000, height=600) 
 
             st.write("---")
@@ -188,6 +204,7 @@ if st.session_state.logged_in:
             if "extracted_pdfs" not in st.session_state:
                 st.session_state.extracted_pdfs = []
 
+            # 2. RPA Extraction Loop
             if st.button("Run RPA Extraction", icon=":material/memory:", type="primary"):
                 if search_phrases_input.strip() == "":
                     st.warning("Please define at least one keyword for the RPA to target.", icon=":material/warning:")
@@ -196,14 +213,18 @@ if st.session_state.logged_in:
                     st.session_state.extracted_pdfs = []
 
                     for uploaded_file in uploaded_files:
+                        clean_filename = get_clean_filename(uploaded_file)
+                        
                         try:
                             result = engine.process_pdf(uploaded_file, phrases_to_find)
                             if result["kept"] > 0:
+                                # Assign the perfectly clean name to the download button
+                                result["filename"] = clean_filename
                                 st.session_state.extracted_pdfs.append(result)
                             else:
-                                st.warning(f"No matching care label data found in {uploaded_file.name}", icon=":material/warning:")
+                                st.warning(f"No matching care label data found in {clean_filename}", icon=":material/warning:")
                         except Exception as e:
-                            st.error(f"RPA Error processing {uploaded_file.name}: {e}", icon=":material/error:")
+                            st.error(f"RPA Error processing {clean_filename}: {e}", icon=":material/error:")
 
             if st.session_state.extracted_pdfs:
                 st.write("---")
