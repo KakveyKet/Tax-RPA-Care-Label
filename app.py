@@ -160,7 +160,7 @@ if st.session_state.logged_in:
                             
                         db.log_upload(uploaded_file.name, save_path)
                         st.session_state.saved_files.add(uploaded_file.name)
-                        st.toast(f"Archived: {uploaded_file.name}", icon=":material/save:")
+                        st.success(f"File physically saved at: {os.path.abspath(save_path)}")
                     except Exception as e:
                         st.error(f"Failed to archive '{uploaded_file.name}'. Error: {e}", icon=":material/error:")
 
