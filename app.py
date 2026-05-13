@@ -326,26 +326,92 @@ if st.session_state.logged_in:
         st.title(":material/admin_panel_settings: System Administration")
         st.write("Manage access to the RPA Care Label system.")
 
-        st.write("### Create New User")
-        
-        with st.form("new_user_form"):
-            new_user = st.text_input("New Username")
-            new_pass = st.text_input("New Password", type="password")
-            new_role = st.selectbox("Role", ["user", "admin"])
-            
-            submitted = st.form_submit_button("Create Account", type="primary")
-            
-            if submitted:
-                if new_user and new_pass:
-                    success = db.create_user(new_user, new_pass, new_role)
-                    if success:
-                        st.success(f"User '{new_user}' successfully created!", icon=":material/check_circle:")
-                    else:
-                        st.error(f"Username '{new_user}' already exists.", icon=":material/error:")
-                else:
-                    st.warning("Please fill out both username and password.", icon=":material/warning:")
-                    
-        st.write("---")
-        st.write("### Registered Users")
+        # Fetch the user list immediately so both forms can use it
         users_df = db.get_all_users()
-        st.dataframe(users_df, use_container_width=True, hide_index=True)
+        user_list = users_df["username"].tolist() if not users_df.empty else []
+
+        # Create two columns for a sleek side-by-side layout
+        col_create, col_reset = st.columns(2)
+
+        # --- LEFT COLUMN: CREATE USER ---
+        with col_create:
+            st.write("### :material/person_add: Create New User")
+            with st.form("new_user_form"):
+                new_user = st.text_input("New Username")
+                new_pass = st.text_input("New Password", type="password")
+                new_role = st.selectbox("Role", ["user", "admin"])
+                
+                submitted_create = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+                
+                if submitted_create:
+                    if new_user and new_pass:
+                        success = db.create_user(new_user, new_pass, new_role)
+                        if success:
+                            st.success(f"User '{new_user}' created!", icon=":material/check_circle:")
+                            st.rerun() # Instantly reloads the page to add the user to the table
+                        else:
+                            st.error(f"Username '{new_user}' already exists.", icon=":material/error:")
+                    else:
+                        st.warning("Please fill out both username and password.", icon=":material/warning:")
+
+        # --- RIGHT COLUMN: RESET PASSWORD ---
+        with col_reset:
+            st.write("### :material/lock_reset: Reset Password")
+            with st.form("reset_pass_form"):
+                target_user = st.selectbox("Select User", user_list)
+                reset_pass = st.text_input("New Password", type="password")
+                
+                submitted_reset = st.form_submit_button("Update Password", type="primary", use_container_width=True)
+                
+                if submitted_reset:
+                    if target_user and reset_pass:
+                        if db.reset_user_password(target_user, reset_pass):
+                            st.success(f"Password for '{target_user}' successfully updated!", icon=":material/check_circle:")
+                        else:
+                            st.error("Failed to update password.", icon=":material/error:")
+                    else:
+                        st.warning("Please type a new password.", icon=":material/warning:")
+                        
+        st.write("---")
+        
+        # --- BOTTOM SECTION: DELETE USERS ---
+        st.write("### :material/group_remove: Manage & Delete Users")
+        st.write("Select a user to permanently delete their account. (The master 'admin' account cannot be deleted).")
+        
+        if not users_df.empty:
+            users_df.insert(0, "Select", False)
+            
+            edited_users_df = st.data_editor(
+                users_df,
+                column_config={
+                    "Select": st.column_config.CheckboxColumn("Delete?", default=False)
+                },
+                disabled=users_df.columns.drop("Select"), 
+                hide_index=True,
+                width="stretch", 
+                key="admin_users_editor"
+            )
+            
+            selected_users = edited_users_df[edited_users_df["Select"] == True]
+            
+            if st.button(f"Delete {len(selected_users)} Selected Users", type="primary", icon=":material/delete:"):
+                users_to_delete = selected_users["username"].tolist()
+                
+                success_count = 0
+                error_admin_blocked = False
+                
+                for u in users_to_delete:
+                    # Double-checking the safety lock in the interface
+                    if u.lower() == "admin":
+                        error_admin_blocked = True
+                    else:
+                        if db.delete_user(u):
+                            success_count += 1
+                
+                if success_count > 0:
+                    st.success(f"Successfully deleted {success_count} user(s)!")
+                if error_admin_blocked:
+                    st.error("Action Blocked: You cannot delete the master 'admin' account.", icon=":material/security:")
+                    
+                if success_count > 0 or error_admin_blocked:
+                    st.rerun() # Refresh to update the table instantly

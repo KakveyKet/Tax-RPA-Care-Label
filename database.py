@@ -128,3 +128,39 @@ def delete_upload_log(filename):
     except Exception as e:
         print(f"Database delete error: {e}")
         return False
+    
+    
+def delete_user(username):
+    """Deletes a user from the database. Prevents deleting the master admin."""
+    # Safety lock: Never allow the default admin to be deleted!
+    if username.lower() == "admin":
+        return False 
+        
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM users WHERE username = ?", (username,))
+        rows_erased = cursor.rowcount 
+        conn.commit()
+        conn.close()
+        return rows_erased > 0
+    except Exception as e:
+        print(f"Database user delete error: {e}")
+        return False
+
+def reset_user_password(username, new_password):
+    """Updates the password for an existing user."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE users SET password_hash = ? WHERE username = ?",
+            (hash_password(new_password), username)
+        )
+        rows_updated = cursor.rowcount
+        conn.commit()
+        conn.close()
+        return rows_updated > 0
+    except Exception as e:
+        print(f"Database password update error: {e}")
+        return False
