@@ -103,6 +103,7 @@ if not st.session_state.logged_in:
         with st.form("login_form"):
             username_input = st.text_input("Username")
             password_input = st.text_input("Password", type="password")
+            
             submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
             
             if submitted:
@@ -268,54 +269,87 @@ if st.session_state.logged_in:
     # MODULE: Processing History
     # ------------------------------------------
     elif app_mode == "Processing History":
-        st.title(":material/history: RPA Processing History")
+        st.title(":material/history: RPA Upload Report")
         
         try:
             history_df = db.get_upload_history()
+            
             if history_df.empty:
                 st.info("No documents have been processed by the RPA yet.", icon=":material/info:")
             else:
-                st.metric("Upload Report", len(history_df))
+                # --- NEW: DATE FILTER LOGIC ---
+                st.write("### :material/date_range: Filter Report")
                 
-                # ADMIN VIEW (Can Delete)
-                if st.session_state.user_role == "admin":
-                    st.write("### :material/delete: Manage Records")
-                    
-                    history_df.insert(0, "Select", False)
-                    
-                    edited_df = st.data_editor(
-                        history_df,
-                        column_config={
-                            "Select": st.column_config.CheckboxColumn("Delete?", default=False)
-                        },
-                        disabled=history_df.columns.drop("Select"), 
-                        hide_index=True,
-                        width="stretch", 
-                        key="admin_history_editor"
-                    )
-                    
-                    selected_rows = edited_df[edited_df["Select"] == True]
-                    
-                    if st.button(f"Delete {len(selected_rows)} Selected Records", type="primary", icon=":material/delete:"):
-                        col_name = "filename"  
-                        files_to_delete = selected_rows[col_name].tolist()
-                        
-                        success_count = 0
-                        for f in files_to_delete:
-                            if db.delete_upload_log(f):
-                                success_count += 1
-                        
-                        if success_count > 0:
-                            st.success(f"Successfully permanently deleted {success_count} records!")
-                            st.cache_data.clear() 
-                            st.rerun()
-                        else:
-                            st.error(f"Failed to delete. The system looked for column '{col_name}' but couldn't find those files in the database.", icon=":material/error:")
+                # 1. Convert the database string dates into real pandas datetime objects
+                history_df['upload_date'] = pd.to_datetime(history_df['upload_date'])
                 
-                # STANDARD USER VIEW (Read-Only)
+                # 2. Calculate the first day of the current month and today
+                today = datetime.now()
+                first_day_of_month = today.replace(day=1)
+                
+                # 3. Create the UI widgets
+                col1, col2 = st.columns(2)
+                with col1:
+                    start_date = st.date_input("Start Date", value=first_day_of_month)
+                with col2:
+                    end_date = st.date_input("End Date", value=today)
+                
+                # 4. Apply the filter mask
+                start_dt = pd.to_datetime(start_date)
+                # We add 1 day and minus 1 second so the end date captures the full 24 hours of that day
+                end_dt = pd.to_datetime(end_date) + pd.Timedelta(days=1, seconds=-1)
+                
+                mask = (history_df['upload_date'] >= start_dt) & (history_df['upload_date'] <= end_dt)
+                filtered_df = history_df.loc[mask].copy()
+                
+                # 5. Convert dates back to clean readable strings for the table display
+                filtered_df['upload_date'] = filtered_df['upload_date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                st.metric("Upload Report", len(filtered_df))
+                st.write("---")
+                
+                if filtered_df.empty:
+                    st.warning("No records found in this date range.", icon=":material/warning:")
                 else:
-                    st.dataframe(history_df, width="stretch", hide_index=True)
+                    # ADMIN VIEW (Can Delete)
+                    if st.session_state.user_role == "admin":
+                        st.write("### :material/delete: Manage Records")
+                        
+                        filtered_df.insert(0, "Select", False)
+                        
+                        edited_df = st.data_editor(
+                            filtered_df,
+                            column_config={
+                                "Select": st.column_config.CheckboxColumn("Delete?", default=False)
+                            },
+                            disabled=filtered_df.columns.drop("Select"), 
+                            hide_index=True,
+                            width="stretch", 
+                            key="admin_history_editor"
+                        )
+                        
+                        selected_rows = edited_df[edited_df["Select"] == True]
+                        
+                        if st.button(f"Delete {len(selected_rows)} Selected Records", type="primary", icon=":material/delete:"):
+                            col_name = "filename"  
+                            files_to_delete = selected_rows[col_name].tolist()
+                            
+                            success_count = 0
+                            for f in files_to_delete:
+                                if db.delete_upload_log(f):
+                                    success_count += 1
+                            
+                            if success_count > 0:
+                                st.success(f"Successfully permanently deleted {success_count} records!")
+                                st.cache_data.clear() 
+                                st.rerun()
+                            else:
+                                st.error(f"Failed to delete. The system looked for column '{col_name}' but couldn't find those files.", icon=":material/error:")
                     
+                    # STANDARD USER VIEW (Read-Only)
+                    else:
+                        st.dataframe(filtered_df, width="stretch", hide_index=True)
+                        
         except Exception as e:
             st.error(f"Could not load system database: {e}", icon=":material/error:")
 
@@ -326,11 +360,9 @@ if st.session_state.logged_in:
         st.title(":material/admin_panel_settings: System Administration")
         st.write("Manage access to the RPA Care Label system.")
 
-        # Fetch the user list immediately so both forms can use it
         users_df = db.get_all_users()
         user_list = users_df["username"].tolist() if not users_df.empty else []
 
-        # Create two columns for a sleek side-by-side layout
         col_create, col_reset = st.columns(2)
 
         # --- LEFT COLUMN: CREATE USER ---
@@ -348,7 +380,7 @@ if st.session_state.logged_in:
                         success = db.create_user(new_user, new_pass, new_role)
                         if success:
                             st.success(f"User '{new_user}' created!", icon=":material/check_circle:")
-                            st.rerun() # Instantly reloads the page to add the user to the table
+                            st.rerun() 
                         else:
                             st.error(f"Username '{new_user}' already exists.", icon=":material/error:")
                     else:
@@ -401,7 +433,6 @@ if st.session_state.logged_in:
                 error_admin_blocked = False
                 
                 for u in users_to_delete:
-                    # Double-checking the safety lock in the interface
                     if u.lower() == "admin":
                         error_admin_blocked = True
                     else:
@@ -414,4 +445,4 @@ if st.session_state.logged_in:
                     st.error("Action Blocked: You cannot delete the master 'admin' account.", icon=":material/security:")
                     
                 if success_count > 0 or error_admin_blocked:
-                    st.rerun() # Refresh to update the table instantly
+                    st.rerun()
