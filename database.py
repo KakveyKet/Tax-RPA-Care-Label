@@ -1,7 +1,7 @@
 import sqlite3
 import pandas as pd
 from datetime import datetime
-import hashlib # <-- NEW: Built-in library for password encryption
+import hashlib
 
 DB_FILE = "pdf_history.db"
 
@@ -45,7 +45,7 @@ def init_db():
     if cursor.fetchone()[0] == 0:
         cursor.execute(
             "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-            ("admin", hash_password("RPA2026!"), "admin") # Your default login
+            ("admin", hash_password("RPA2026!"), "admin") 
         )
         
     conn.commit()
@@ -64,7 +64,6 @@ def verify_user(username, password):
 
     if result:
         stored_hash, role = result
-        # Compare the entered password against the saved encrypted version
         if stored_hash == hash_password(password):
             return True, role
             
@@ -83,7 +82,6 @@ def create_user(username, password, role="user"):
         conn.close()
         return True
     except sqlite3.IntegrityError:
-        # This triggers if the username already exists (because of TEXT UNIQUE in table setup)
         return False 
 
 def get_all_users():
@@ -94,7 +92,7 @@ def get_all_users():
     return df
 
 # ==========================================
-# PDF TRACKING LOGIC (Unchanged)
+# PDF TRACKING LOGIC
 # ==========================================
 def log_upload(filename, filepath):
     conn = sqlite3.connect(DB_FILE)
@@ -112,3 +110,21 @@ def get_upload_history():
     df = pd.read_sql_query("SELECT * FROM uploads ORDER BY upload_date DESC", conn)
     conn.close()
     return df
+
+def delete_upload_log(filename):
+    """Deletes a file record from the database."""
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        
+        # Uses the correct table name 'uploads' and LIKE to ensure a match
+        cursor.execute("DELETE FROM uploads WHERE filename LIKE ?", ('%' + filename + '%',))
+        
+        rows_erased = cursor.rowcount 
+        conn.commit()
+        conn.close()
+        
+        return rows_erased > 0
+    except Exception as e:
+        print(f"Database delete error: {e}")
+        return False

@@ -3,8 +3,9 @@ import streamlit.components.v1 as components
 from streamlit_javascript import st_javascript
 import pandas as pd
 import os
-import re # <-- NEW: For searching text
-from pypdf import PdfReader # <-- NEW: For reading the PDF text
+import re
+from datetime import datetime
+from pypdf import PdfReader
 from streamlit_pdf_viewer import pdf_viewer
 
 import database as db
@@ -15,33 +16,29 @@ db.init_db()
 st.set_page_config(page_title="RPA Care Label", page_icon="🤖", layout="wide")
 
 # ==========================================
-# NEW: SMART FILENAME EXTRACTOR
+# SMART FILENAME EXTRACTOR
 # ==========================================
 def get_clean_filename(uploaded_file):
     """Reads the PDF to extract the season and formats the filename cleanly."""
     base_name, ext = os.path.splitext(uploaded_file.name)
     
-    # 1. Clean up the CET timestamp to use parentheses
     if " CET_" in base_name:
         base_name = base_name.replace(" CET_", " (") + ")"
         
-    # 2. Extract the Season from the PDF text!
     season = None
     try:
         reader = PdfReader(uploaded_file)
         first_page_text = reader.pages[0].extract_text()
-        uploaded_file.seek(0) # CRITICAL: Reset the file pointer so the rest of the app can read it
+        uploaded_file.seek(0) 
         
-        # Look for "Season :" followed by any spaces, then grab the text (e.g. FW2026)
         match = re.search(r'Season\s*:\s*([A-Za-z0-9]+)', first_page_text)
         if match:
             season = match.group(1)
     except Exception:
         pass
         
-    # 3. Inject the season into the filename if it was found
     if season and f"_{season}" not in base_name:
-        parts = base_name.split('_', 1) # Split after the Working #
+        parts = base_name.split('_', 1) 
         if len(parts) == 2:
             base_name = f"{parts[0]}_{season}_{parts[1]}"
         else:
@@ -156,7 +153,6 @@ if st.session_state.logged_in:
     # ------------------------------------------
     if app_mode == "Care Label Extractor":
         st.title(":material/smart_toy: RPA Care Label")
-        st.write("Automated extraction of Care Label specifications from Tech Pack PDFs.")
 
         uploaded_files = st.file_uploader("Upload Tech Pack PDFs", type=["pdf"], accept_multiple_files=True)
 
@@ -164,9 +160,7 @@ if st.session_state.logged_in:
             if "saved_files" not in st.session_state:
                 st.session_state.saved_files = set()
                 
-            # 1. Archiving Loop
             for uploaded_file in uploaded_files:
-                # Use our new magic helper function!
                 clean_filename = get_clean_filename(uploaded_file)
                 
                 if clean_filename not in st.session_state.saved_files:
@@ -204,7 +198,6 @@ if st.session_state.logged_in:
             if "extracted_pdfs" not in st.session_state:
                 st.session_state.extracted_pdfs = []
 
-            # 2. RPA Extraction Loop
             if st.button("Run RPA Extraction", icon=":material/memory:", type="primary"):
                 if search_phrases_input.strip() == "":
                     st.warning("Please define at least one keyword for the RPA to target.", icon=":material/warning:")
@@ -218,7 +211,6 @@ if st.session_state.logged_in:
                         try:
                             result = engine.process_pdf(uploaded_file, phrases_to_find)
                             if result["kept"] > 0:
-                                # Assign the perfectly clean name to the download button
                                 result["filename"] = clean_filename
                                 st.session_state.extracted_pdfs.append(result)
                             else:
@@ -258,11 +250,15 @@ if st.session_state.logged_in:
                 if len(selected_for_download) > 1:
                     st.write("### :material/folder_zip: Batch Download")
                     zip_data = engine.create_zip_archive(selected_for_download)
+                    
+                    current_date = datetime.now().strftime("%d_%m_%Y")
+                    dynamic_zip_name = f"RPA_Care_Labels_{current_date}.zip"
+                    
                     st.download_button(
                         label=f"Download {len(selected_for_download)} Extracted Labels (ZIP Archive)",
                         icon=":material/archive:",
                         data=zip_data,
-                        file_name="RPA_Care_Labels.zip",
+                        file_name=dynamic_zip_name,
                         mime="application/zip",
                         type="primary",
                         use_container_width=True 
@@ -273,15 +269,53 @@ if st.session_state.logged_in:
     # ------------------------------------------
     elif app_mode == "Processing History":
         st.title(":material/history: RPA Processing History")
-        st.write("Audit log of all Tech Packs processed by the system.")
         
         try:
             history_df = db.get_upload_history()
             if history_df.empty:
                 st.info("No documents have been processed by the RPA yet.", icon=":material/info:")
             else:
-                st.metric("Total Tech Packs Processed", len(history_df))
-                st.dataframe(history_df, use_container_width=True, hide_index=True)
+                st.metric("Upload Report", len(history_df))
+                
+                # ADMIN VIEW (Can Delete)
+                if st.session_state.user_role == "admin":
+                    st.write("### :material/delete: Manage Records")
+                    
+                    history_df.insert(0, "Select", False)
+                    
+                    edited_df = st.data_editor(
+                        history_df,
+                        column_config={
+                            "Select": st.column_config.CheckboxColumn("Delete?", default=False)
+                        },
+                        disabled=history_df.columns.drop("Select"), 
+                        hide_index=True,
+                        width="stretch", 
+                        key="admin_history_editor"
+                    )
+                    
+                    selected_rows = edited_df[edited_df["Select"] == True]
+                    
+                    if st.button(f"Delete {len(selected_rows)} Selected Records", type="primary", icon=":material/delete:"):
+                        col_name = "filename"  
+                        files_to_delete = selected_rows[col_name].tolist()
+                        
+                        success_count = 0
+                        for f in files_to_delete:
+                            if db.delete_upload_log(f):
+                                success_count += 1
+                        
+                        if success_count > 0:
+                            st.success(f"Successfully permanently deleted {success_count} records!")
+                            st.cache_data.clear() 
+                            st.rerun()
+                        else:
+                            st.error(f"Failed to delete. The system looked for column '{col_name}' but couldn't find those files in the database.", icon=":material/error:")
+                
+                # STANDARD USER VIEW (Read-Only)
+                else:
+                    st.dataframe(history_df, width="stretch", hide_index=True)
+                    
         except Exception as e:
             st.error(f"Could not load system database: {e}", icon=":material/error:")
 
