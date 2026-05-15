@@ -18,29 +18,10 @@ st.set_page_config(page_title="RPA Care Label", page_icon="🤖", layout="wide")
 # ==========================================
 # SMART FILENAME EXTRACTOR
 # ==========================================
-# ==========================================
-# SMART FILENAME EXTRACTOR
-# ==========================================
 def get_clean_filename(uploaded_file):
     """Reads the PDF to extract the season and formats the filename cleanly."""
     base_name, ext = os.path.splitext(uploaded_file.name)
     
-    # --- NEW LOGIC: Handling ADPrint format ---
-    # Example: ADPrint_S2762LHRB001RM_SS2027_213001_BUY READY_12_05_2026
-    if base_name.startswith("ADPrint_"):
-        # We use regex to precisely slice the string into 5 specific groups
-        match = re.search(r"ADPrint_(.*?)_(.*?)_(.*?)_(.*?)_(\d{2}_\d{2}_\d{4})", base_name)
-        if match:
-            working_num = match.group(1)
-            season = match.group(2)
-            # Group 3 is the Factory Code (213001), which we intentionally leave out of the final name!
-            state = match.group(4).replace("+", " ") # Cleans "BUY+READY" to "BUY READY"
-            date_str = match.group(5).replace("_", ".") # Converts "12_05_2026" to "12.05.2026"
-            
-            # Stitch it back together into your exact target format
-            return f"{working_num}_{season}_{date_str} ({state}){ext}"
-
-    # --- OLD LOGIC: Handling the CET format ---
     if " CET_" in base_name:
         base_name = base_name.replace(" CET_", " (") + ")"
         
