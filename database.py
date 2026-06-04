@@ -49,7 +49,7 @@ def init_db():
         )
     cursor.execute(
         "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-        ("admin2", hash_password("@newadmin123"), "admin") 
+        ("admin2", hash_password("@newadmin123"), "admin1") 
     )
     conn.commit()
     conn.close()
