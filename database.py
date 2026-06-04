@@ -15,6 +15,9 @@ def hash_password(password):
 # ==========================================
 # DATABASE INITIALIZATION
 # ==========================================
+# ==========================================
+# DATABASE INITIALIZATION
+# ==========================================
 def init_db():
     """Creates the tables if they do not exist."""
     conn = sqlite3.connect(DB_FILE)
@@ -30,7 +33,7 @@ def init_db():
         )
     ''')
     
-    # 2. NEW: The User Accounts table
+    # 2. The User Accounts table
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,17 +43,21 @@ def init_db():
         )
     ''')
     
-    # 3. NEW: Auto-create the Master Admin if the table is empty
-    cursor.execute("SELECT COUNT(*) FROM users")
-    if cursor.fetchone()[0] == 0:
-        cursor.execute(
-            "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-            ("admin", hash_password("RPA2026!"), "admin") 
-        )
+    # 3. Auto-create the Master Admins
+    # Using 'INSERT OR IGNORE' prevents errors if these users already exist in the database.
+    
+    # Fixed User 1 (Original)
     cursor.execute(
         "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
-        ("admin2", hash_password("@newadmin123"), "admin1") 
+        ("admin", hash_password("RPA2026!"), "admin") 
     )
+    
+    # Fixed User 2 (New)
+    cursor.execute(
+        "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+        ("admin2", hash_password("@newadmin123"), "admin") 
+    )
+        
     conn.commit()
     conn.close()
 
